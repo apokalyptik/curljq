@@ -1,0 +1,74 @@
+#!/bin/bash
+set -eio pipefail
+
+type cat > /dev/null || ( echo "cat is missing. please panic"; exit 1 )
+type jq > /dev/null || ( echo "jq is missing, please install jq"; exit 1 )
+type curl > /dev/null || ( echo "curl is missing, please install curl"; exit 1 )
+
+case "${1:-}" in
+	-h,--help,help)
+		echo "$0"
+		echo "	-h, --help, help"
+		echo "		This help message"
+		echo "	--jq '<input filter>'"
+		echo "		Allowed multiple times. --jq '+{\"foo\":\"bar\"}' --jq '+{\"baz\": \"boo\"}' will become"
+		echo "		' . | . +{\"foo\":\"bar\"} | . +{\"baz\": \"boo\"}"
+		echo "  --jq-input <-|filename|json_data>"
+		echo "		- or a filename will cause standard input or that file to be supplied to JQ as input data"
+		echo "		any other value will cause that to be used. For example the default value of {}"
+		echo "	--jq-arg <argument>"
+		echo "		Will cause the argument to be used when executing JQ. This may be used as many times as"
+		echo "		you wish"
+		echo "	<any other argument>"
+		echo "		Any other argument passes to this wrapper will be passed to curl"
+		exit 0
+		;;
+esac
+
+CURL_ARGS=('-H' 'Accept: application/json')
+JQ_ARGS=()
+JQ_FILTER=('.')
+START_DATA="{}"
+NEXT_IS_JQ_FILTER=false
+NEXT_IS_JQ_ARG=false
+NEXT_IS_INPUT=false
+
+function join_by {
+	local d=${1-} f=${2-}
+	if shift 2; then
+		printf %s "$f" "${@/#/$d}"
+	fi
+}
+
+for ARG in "$@"; do
+	if $NEXT_IS_JQ_FILTER; then
+		NEXT_IS_JQ_FILTER=false
+		JQ_FILTER+=(". $ARG")
+	elif $NEXT_IS_JQ_ARG; then
+		NEXT_IS_JQ_ARG=false
+		JQ_ARGS+=("$ARG")
+	elif $NEXT_IS_INPUT; then
+		NEXT_IS_INPUT=false
+		START_DATA="$ARG"
+	elif [ "--jq" = "$ARG" ]; then
+		NEXT_IS_JQ_FILTER=true
+	elif [ "--jq-arg" = "$ARG" ]; then
+		NEXT_IS_JQ_ARG=true
+	elif [ "--jq-input" = "$ARG" ]; then
+		NEXT_IS_INPUT=true
+	else
+		CURL_ARGS+=("$ARG")
+	fi
+done
+
+JQ_FILTER=$(join_by ' | ' "${JQ_FILTER[@]}")
+
+if [ -f "$START_DATA" ]; then
+	curl "${CURL_ARGS[@]}" -d "$( cat "$START_DATA" | jq "$JQ_FILTER" "${JQ_ARGS[@]}")"
+elif [ "-"  = "$START_DATA" ]; then
+	curl "${CURL_ARGS[@]}" -d "$( cat | jq "$JQ_FILTER" "${JQ_ARGS[@]}")"
+else
+	curl "${CURL_ARGS[@]}" -d "$( echo "$START_DATA" | jq "$JQ_FILTER" "${JQ_ARGS[@]}")"
+fi
+
+
